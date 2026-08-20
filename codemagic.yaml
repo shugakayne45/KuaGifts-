@@ -1,0 +1,28 @@
+workflows:
+  kuagifts-android-demo:
+    name: KuaGifts Android Demo Build
+    max_build_duration: 30
+    instance_type: mac_mini_m2
+    environment:
+      node: 20
+      vars:
+        # Not used at build time since the app loads the live Railway URL at
+        # runtime (see capacitor.config.ts) — kept here for reference only.
+        BACKEND_URL: https://YOUR-APP-NAME.up.railway.app
+    scripts:
+      - name: Install dependencies
+        script: |
+          npm install
+      - name: Build web assets
+        script: |
+          npm run build
+      - name: Sync Capacitor
+        script: |
+          npx cap sync android
+      - name: Build debug APK
+        script: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+    artifacts:
+      - android/app/build/outputs/apk/debug/*.apk
