@@ -1,0 +1,272 @@
+// KuaGifts PostgreSQL & Prisma Schema
+// Purpose-Locked Remittance & Escrow Ledger with Dual-Factor Anti-Arbitrage Engine
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  SENDER
+  RECEIVER
+  CASHIER
+  SYSTEM_ADMIN
+}
+
+enum CountryCode {
+  GH
+  NG
+}
+
+enum PurposeCategory {
+  GROCERIES_FOOD
+  FUEL_TRANSPORT
+  HEALTHCARE_PHARMACY
+  UTILITIES_POWER
+  EDUCATION_BOOKS
+  HOLIDAY_HAMPER
+}
+
+enum GiftCardStatus {
+  ISSUED
+  CLAIMED
+  PARTIALLY_REDEEMED
+  REDEEMED
+  EXPIRED
+}
+
+enum EscrowStatus {
+  PENDING
+  FUNDED
+  LOCKED
+  PARTIALLY_RELEASED
+  SETTLED
+  REFUNDED
+}
+
+enum LedgerEntryType {
+  SENDER_DEPOSIT_HELD
+  FX_CONVERSION_LOCK
+  POS_SCAN_RESERVATION
+  MERCHANT_SETTLEMENT_RELEASE
+  MERCHANT_COMMISSION_DEDUCTED
+  MERCHANT_BATCH_SETTLEMENT_PAYOUT
+  ESCROW_REFUND
+}
+
+model User {
+  id            String       @id @default(uuid())
+  email         String       @unique
+  name          String
+  phone         String       @unique
+  country       CountryCode
+  role          Role         @default(SENDER)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  ordersSent    Order[]      @relation("SenderOrders")
+  
+  @@index([phone])
+  @@index([email])
+}
+
+model Merchant {
+  id                  String            @id @default(uuid())
+  name                String
+  slug                String            @unique
+  category            PurposeCategory
+  country             CountryCode
+  tagline             String?
+  logo                String?
+  verified            Boolean           @default(true)
+  commissionRate      Decimal           @db.Decimal(5, 4) // e.g. 0.0450 for 4.5%
+  acceptedCurrencies  String[]          // e.g. ["GHS"] or ["NGN"]
+  description         String?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  branches            Branch[]
+  orders              Order[]
+  redemptions         RedemptionEvent[]
+  ledgerEntries       EscrowLedger[]
+
+  @@index([country, category])
+}
+
+model Branch {
+  id             String            @id @default(uuid())
+  merchantId     String
+  merchant       Merchant          @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  name           String
+  address        String
+  city           String
+  country        CountryCode
+  posTerminalId  String            @unique
+  createdAt      DateTime          @default(now())
+
+  redemptions    RedemptionEvent[]
+
+  @@index([merchantId])
+}
+
+model Order {
+  id                  String            @id @default(uuid())
+  orderNumber         String            @unique // e.g. KUA-ORD-2026-9812
+  senderId            String?
+  sender              User?             @relation("SenderOrders", fields: [senderId], references: [id])
+  senderName          String
+  senderEmail         String
+  receiverName        String
+  receiverPhone       String
+  receiverCountry     CountryCode
+  merchantId          String
+  merchant            Merchant          @relation(fields: [merchantId], references: [id])
+  purposeCategory     PurposeCategory
+  
+  // FX & Escrow Locking Engine
+  sourceCurrency      String            // USD, GBP, EUR
+  sourceAmount        Decimal           @db.Decimal(12, 2)
+  fxRate              Decimal           @db.Decimal(12, 4) // e.g. 15.6500 GHS/USD
+  fxLockExpiresAt     DateTime
+  targetCurrency      String            // GHS, NGN
+  targetAmount        Decimal           @db.Decimal(14, 2)
+  
+  escrowStatus        EscrowStatus      @default(FUNDED)
+  pspReference        String            // Paystack/Flutterwave transaction ref
+  
+  // Holiday Media
+  voiceNoteUrl        String?
+  voiceDurationSec    Int?
+  photoUrl            String?
+  personalMessage     String            @db.Text
+  
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  giftCard            GiftCard?
+  ledgerEntries       EscrowLedger[]
+
+  @@index([orderNumber])
+  @@index([receiverPhone])
+  @@index([escrowStatus])
+}
+
+model GiftCard {
+  id                  String            @id @default(uuid())
+  orderId             String            @unique
+  order               Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  
+  cardNumber          String            @unique // e.g. KUA-GH-8892-4410
+  ean13Code           String            @unique // 13-digit EAN for optical scanner
+  upcCode             String            @unique // 12-digit UPC alternative
+  claimToken          String            @unique // Direct web URL token
+  
+  status              GiftCardStatus    @default(ISSUED)
+  initialBalance      Decimal           @db.Decimal(14, 2)
+  remainingBalance    Decimal           @db.Decimal(14, 2)
+  currency            String            // GHS or NGN
+  
+  expiresAt           DateTime
+  createdAt           DateTime          @default(now())
+  redeemedAt          DateTime?
+  lastOtpSentAt       DateTime?
+
+  otpSessions         OtpSession[]
+  redemptions         RedemptionEvent[]
+  ledgerEntries       EscrowLedger[]
+
+  @@index([ean13Code])
+  @@index([claimToken])
+  @@index([cardNumber])
+}
+
+model EscrowLedger {
+  id                  String            @id @default(uuid())
+  transactionId       String            @unique // Immutable double-entry ID
+  orderId             String
+  order               Order             @relation(fields: [orderId], references: [id])
+  giftCardId          String?
+  giftCard            GiftCard?         @relation(fields: [giftCardId], references: [id])
+  merchantId          String?
+  merchant            Merchant?         @relation(fields: [merchantId], references: [id])
+  
+  entryType           LedgerEntryType
+  debitAccount        String            // e.g. "PSP_CUSTODY_USD", "ESCROW_GHS_POOL"
+  creditAccount       String            // e.g. "MERCHANT_SETTLEMENT_PAYABLE", "KUA_REVENUE"
+  amount              Decimal           @db.Decimal(14, 2)
+  currency            String
+  fxRateApplied       Decimal?          @db.Decimal(12, 4)
+  commissionAmount    Decimal?          @db.Decimal(14, 2)
+  referenceId         String            // external PSP or POS reference
+  description         String
+  createdAt           DateTime          @default(now())
+
+  @@index([transactionId])
+  @@index([orderId])
+  @@index([entryType])
+}
+
+model OtpSession {
+  id                  String            @id @default(uuid())
+  giftCardId          String
+  giftCard            GiftCard          @relation(fields: [giftCardId], references: [id], onDelete: Cascade)
+  phoneNumber         String
+  otpCode             String            // 6-digit numeric OTP (hashed in production)
+  attempts            Int               @default(0)
+  verified            Boolean           @default(false)
+  expiresAt           DateTime
+  createdAt           DateTime          @default(now())
+
+  @@index([giftCardId, otpCode])
+}
+
+model RedemptionEvent {
+  id                  String            @id @default(uuid())
+  giftCardId          String
+  giftCard            GiftCard          @relation(fields: [giftCardId], references: [id])
+  merchantId          String
+  merchant            Merchant          @relation(fields: [merchantId], references: [id])
+  branchId            String?
+  branch              Branch?           @relation(fields: [branchId], references: [id])
+  
+  cashierName         String
+  posTerminalId       String
+  redeemedAmount      Decimal           @db.Decimal(14, 2)
+  currency            String
+  commissionFee       Decimal           @db.Decimal(14, 2) // Retained by coalition network
+  netMerchantPayout   Decimal           @db.Decimal(14, 2) // Dispatched to Merchant Bank
+  verifiedOtp         String
+  receiverPhone       String
+  timestamp           DateTime          @default(now())
+
+  @@index([giftCardId])
+  @@index([merchantId])
+}
+
+model MerchantBatchSettlement {
+  id                    String            @id @default(uuid())
+  batchReference        String            @unique // e.g. BATCH-SETTLE-2026-W34-MELCOM
+  merchantId            String
+  merchantName          String
+  currency              String            // GHS, NGN
+  grossRedemptionsTotal Decimal           @db.Decimal(14, 2)
+  commissionFeeTotal    Decimal           @db.Decimal(14, 2)
+  commissionRatePercent Decimal           @db.Decimal(5, 2)
+  netPayoutAmount       Decimal           @db.Decimal(14, 2)
+  redemptionCount       Int
+  settlementStatus      String            @default("SETTLED") // PENDING, PROCESSING, SETTLED
+  destinationBank       String
+  destinationAccountNum String
+  payoutTxHash          String            // Bank ACH/NIP transfer hash
+  periodStart           DateTime
+  periodEnd             DateTime
+  settledAt             DateTime          @default(now())
+
+  @@index([merchantId])
+  @@index([batchReference])
+}
+

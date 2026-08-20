@@ -1,0 +1,6 @@
+{
+  "name": "KuaGifts",
+  "description": "Purpose-locked West Africa remittance and holiday gifting platform with PSP escrow ledger and dual-factor anti-arbitrage POS redemption.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
