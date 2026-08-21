@@ -4,11 +4,11 @@ workflows:
     max_build_duration: 30
     instance_type: mac_mini_m2
     environment:
-      node: 20
+      node: 22
       vars:
         # Not used at build time since the app loads the live Railway URL at
         # runtime (see capacitor.config.ts) — kept here for reference only.
-        BACKEND_URL: https://YOUR-APP-NAME.up.railway.app
+        BACKEND_URL: https://kuagifts-production.up.railway.app
     scripts:
       - name: Install dependencies
         script: |
