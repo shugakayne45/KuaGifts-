@@ -5,6 +5,7 @@ workflows:
     instance_type: mac_mini_m2
     environment:
       node: 22
+      java: 21
       vars:
         # Not used at build time since the app loads the live Railway URL at
         # runtime (see capacitor.config.ts) — kept here for reference only.
